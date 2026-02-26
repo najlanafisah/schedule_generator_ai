@@ -1,10 +1,10 @@
-class Taks {
+class Task {
   final String name;
   final String priority;
   final int duration;
   final String deadline;
 
-  Taks({required this.name, required this.priority, required this.duration, required this.deadline});
+  Task({required this.name, required this.priority, required this.duration, required this.deadline});
 
   @override
   String toString() {

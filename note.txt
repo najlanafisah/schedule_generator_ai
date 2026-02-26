@@ -1,0 +1,4 @@
+NOTES:
+- semua variable yang ada finalnya, gabisa di ubah isinya, jadi harus ganti ke non-final
+- await itu digunakan sebagai penanda kalo prosesnya udh selesai
+- 
