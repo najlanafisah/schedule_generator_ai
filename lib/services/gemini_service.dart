@@ -1,72 +1,105 @@
 import 'dart:convert';
-
-import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:http/http.dart' as http;
 import 'package:schedule_gemerator_ai/models/task.dart';
 
 class GeminiService {
-  static const String _baseUrl = "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent";
+  static const String _baseUrl =
+      "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent";
   final String apiKey;
-
-  GeminiService() : apiKey = dotenv.env["GEMINI_API_KEY"] ?? "Please input your API KEY" {
-    if (apiKey.isEmpty) { // kalo kosong
-      throw ArgumentError("API KEY is missing");
+  GeminiService() : apiKey = dotenv.env["GEMINI_API_KEY"] ?? "" {
+    if (apiKey.isEmpty) {
+      throw ArgumentError("API key is missing");
     }
   }
-
-  Future<String> generateSchedule(List<Task> tasks) async { // ini pake async karena ada proses menunggu dan proses yang berjalan bersamaan (misal btn generate schedule, terus sambil menampilkan loading indicator, )
+  Future<String> generateSchedule(List<Task> tasks) async {
     _validateTasks(tasks);
     final prompt = _buildPrompt(tasks);
     try {
-      // nanti ke print di debug console
-      print("Prompt: \n$prompt");
-      // add request time out message to avoid indefinate hangs if the API doesn't response
-      final response = await http
-          .post(Uri.parse("$_baseUrl?key=$apiKey"), headers: {
-            "Content-Type": "application/json",
-          },
-          body: jsonEncode({
-            "contents": [
-              {
-                "role": "user",
-                "parts": [
-                  {"text": prompt}
-                ]
-              }
-            ]
-          })
-          ).timeout(Duration(seconds: 20)); // kalo misal AI tidak merespon selama 20 detik, biar ga kelamaan juga dan bikin bete
-          return _handleResponse(response);
+      final response = await http.post(
+        Uri.parse("$_baseUrl?key=$apiKey"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "contents": [
+            {
+              "role": "user",
+              "parts": [
+                {"text": prompt},
+              ],
+            },
+          ],
+        }),
+      );
+      return _handleResponse(response);
     } catch (e) {
       throw ArgumentError("Failed to generate schedule: $e");
     }
   }
 
-  String _handleResponse(http.Response responses) {
-    final data = jsonDecode(responses.body);
-    if (responses.statusCode == 401) { // 401 itu atrinya Unauthorized / api tidak valid (kode status HTTP yang menunjukkan permintaan ke server ditolak karena kredensial autentikasi (username/password) tidak valid, kedaluwarsa, atau tidak ada)
-      throw ArgumentError("Invalid API Key or Unauthorized Access");
-    } else if(responses.statusCode == 429) { // 429 atrinya too many request/ tokennya abis
+  String _handleResponse(http.Response response) {
+    final data = jsonDecode(response.body);
+    if (response.statusCode == 401) {
+      throw ArgumentError("Invalid API key or Unauthorized Access");
+    } else if (response.statusCode == 429) {
       throw ArgumentError("Rate limit exceeded");
-    } else if (responses.statusCode == 500) { // 500 artinya server error
-      throw ArgumentError("Intenal server error");
-    } else if (responses.statusCode == 503) { // 503 Service Unavailable / server tidak tersedia
+    } else if (response.statusCode == 500) {
+      throw ArgumentError("Internal server error");
+    } else if (response.statusCode == 503) {
       throw ArgumentError("Service unavailable");
-    } else if (responses.statusCode == 200) { // 200 = ok bisa dipake
-      return data["candidates"][0]["content"]["parts"][0]["tetx"]; // response yang akan di kembalikan oleh AI
-    } else { // kalo misla errornya diluar dari kondisi error yag sudah diberikan
+    } else if (response.statusCode == 200) {
+      final raw = data["candidates"][0]["content"]["parts"][0]["text"];
+      return _sanitizeScheduleOutput(raw.toString());
+    } else {
       throw ArgumentError("Unknown error");
     }
   }
 
   String _buildPrompt(List<Task> tasks) {
-    final tasksList = tasks.map((tasks) => "${tasks.name} (Priority: ${tasks.priority}, Duration: ${tasks.duration} minute, Deadline: ${tasks.deadline})").join("\n");
-    return "Buatkan jadwal harian yang optimal berdasarkan task berikut:\n$tasksList";
+    final tasksList = tasks
+        .map(
+          (task) =>
+              "${task.name} (Priority: ${task.priority}, Duration: ${task.duration} minute, Deadline: ${task.deadline})",
+        )
+        .join("\n");
+    return '''
+Buat jadwal harian optimal berdasarkan task berikut:
+$tasksList
+
+Output HARUS singkat, jelas, dan TANPA markdown.
+Aturan output:
+1) Maksimal 8 baris.
+2) Jangan gunakan **, *, |, #, tabel, atau backtick.
+3) Format wajib:
+Ringkasan: <1 kalimat>
+Jadwal:
+HH:mm-HH:mm | <nama task>
+HH:mm-HH:mm | <nama task>
+Alasan: <1 kalimat pendek>
+
+Gunakan Bahasa Indonesia.
+''';
   }
 
-  // kadang yang bikin error itu adalah perubahan versi library
+  // ini biar schedulenya rapi
+  String _sanitizeScheduleOutput(String text) {
+    final noMarkdown = text
+        .replaceAll('**', '')
+        .replaceAll('`', '')
+        .replaceAll('#', '')
+        .replaceAll('|', ' | ');
+
+    final lines = noMarkdown
+        .split('\n')
+        .map((line) => line.replaceAll(RegExp(r'\s+'), ' ').trim())
+        .where((line) => line.isNotEmpty)
+        .where((line) => line != ':' && line != '-' && line != '|')
+        .toList();
+
+    return lines.join('\n');
+  }
+
   void _validateTasks(List<Task> tasks) {
-    if (tasks.isEmpty) throw ArgumentError("Task cannot be empty. Please insert your prompt");
+    if (tasks.isEmpty) throw ArgumentError("Tasks cannot be empty");
   }
 }
 
